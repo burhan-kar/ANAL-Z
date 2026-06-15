@@ -190,12 +190,13 @@ const LS = {
    type: 'metal' (Truncgil), 'fx' (Truncgil), 'bist' (NosyAPI)
    bist anahtarı: bist:SEMBOL (örn. bist:THYAO) */
 const CATALOG = {
-  // Kıymetli maden & döviz (Truncgil)
-  gram_altin:{name:'Gram Altın', tag:'Kıymetli Maden', type:'metal', tkeys:['GRA','gram-altin','Gram Altın'], unit:'₺'},
-  ons:       {name:'Ons Altın (XAU)', tag:'Kıymetli Maden', type:'metal', tkeys:['ONS','ons','Ons'], unit:'$'},
-  gumus:     {name:'Gümüş (Gram)', tag:'Kıymetli Maden', type:'metal', tkeys:['GUMUS','gumus','Gümüş'], unit:'₺'},
-  ceyrek:    {name:'Çeyrek Altın', tag:'Kıymetli Maden', type:'metal', tkeys:['CEYREK_YENI','ceyrek-altin','Çeyrek Altın','CEYREK'], unit:'₺'},
-  cumhuriyet:{name:'Cumhuriyet Altını', tag:'Kıymetli Maden', type:'metal', tkeys:['CUMHURIYET_YENI','cumhuriyet-altini','Cumhuriyet Altını','CUMHURIYET'], unit:'₺'},
+  // Kıymetli maden & döviz (Truncgil) — kodlar gerçek today.json ile birebir eşleşir
+  gram_altin:{name:'Gram Altın', tag:'Kıymetli Maden', type:'metal', tkeys:['gram-altin','GRA','Gram Altın'], unit:'₺'},
+  darphane:  {name:'Darphane Gram (Has Altın)', tag:'Kıymetli Maden', type:'metal', tkeys:['gram-has-altin','has-altin','Has Altın'], unit:'₺'},
+  ons:       {name:'Ons Altın (XAU)', tag:'Kıymetli Maden', type:'metal', tkeys:['ons','ONS','Ons'], unit:'$'},
+  gumus:     {name:'Gümüş (Gram)', tag:'Kıymetli Maden', type:'metal', tkeys:['gumus','GUMUS','Gümüş'], unit:'₺'},
+  ceyrek:    {name:'Çeyrek Altın', tag:'Kıymetli Maden', type:'metal', tkeys:['ceyrek-altin','CEYREK_YENI','Çeyrek Altın'], unit:'₺'},
+  cumhuriyet:{name:'Cumhuriyet Altını', tag:'Kıymetli Maden', type:'metal', tkeys:['cumhuriyet-altini','CUMHURIYET_YENI','Cumhuriyet Altını'], unit:'₺'},
   usd:       {name:'Dolar / TL', tag:'Döviz', type:'fx', tkeys:['USD','usd','Dolar'], unit:'₺'},
   eur:       {name:'Euro / TL', tag:'Döviz', type:'fx', tkeys:['EUR','eur','Euro'], unit:'₺'},
 };
@@ -206,7 +207,7 @@ const BIST_POPULAR = ['THYAO','GARAN','AKBNK','ASELS','KCHOL','SISE','EREGL','BI
 /* ---------- Uygulama durumu ---------- */
 const S = {
   tab:'watch',
-  favorites: LS.get('favorites', ['gram_altin','ons','usd']),  // varlık anahtarları veya bist:SEMBOL
+  favorites: LS.get('favorites', ['gram_altin','darphane','ons','gumus','usd']),  // varlık anahtarları veya bist:SEMBOL
   metalData: null,        // {gram_altin:{buy,sell,change}, ...}
   bistData: {},           // {THYAO:{price,change,...}}
   series: LS.get('series', {}),   // {key:[{t,v}]} cihaz-içi fiyat geçmişi (yedek)
@@ -225,7 +226,7 @@ const S = {
 /* ---------- Yardımcılar ---------- */
 function pick(o,keys){ if(!o) return null; for(const k of keys){ if(o[k]!=null) return o[k]; } return null; }
 function num(x){ if(x==null) return null; if(typeof x==='number') return x;
-  let s=String(x).replace(/\s/g,'').replace(/\.(?=\d{3}(\D|$))/g,'').replace(',','.').replace(/[^\d.\-]/g,'');
+  let s=String(x).replace(/[$%\s₺€£]/g,'').replace(/\.(?=\d{3}(\D|$))/g,'').replace(',','.').replace(/[^\d.\-]/g,'');
   const n=parseFloat(s); return isNaN(n)?null:n; }
 function fmt(n,dec=2){ if(n==null||isNaN(n)) return '–'; return n.toLocaleString('tr-TR',{minimumFractionDigits:dec,maximumFractionDigits:dec}); }
 function fmtPrice(key,n){ const c=catalogOf(key); const u=c?c.unit:''; if(n==null) return '–';
@@ -468,21 +469,42 @@ function metalSell(key){
 
 function buildSummary(key, verdict, r, sr, score){
   const name=catalogOf(key)?.name||key;
+  const price=metalSell(key);
+  // Eyleme yönelik seviye önerileri (destek/direnç temelli)
+  let levels='';
+  if(sr && price){
+    if(verdict==='buy'){
+      levels=` İzlenecek seviyeler: destek ~${fmt(sr.support)} (bu seviye korunursa alım tezi güçlenir), direnç ~${fmt(sr.resistance)} (ilk hedef bölge). Destek kırılırsa tez bozulur — stop için destek altını referans al.`;
+    } else if(verdict==='sell'){
+      levels=` İzlenecek seviyeler: direnç ~${fmt(sr.resistance)} (aşılamazsa satış baskısı sürebilir), destek ~${fmt(sr.support)} (geri çekilmede ilk durak). Direnç yukarı kırılırsa temkinli senaryo zayıflar.`;
+    } else {
+      levels=` Bant: destek ~${fmt(sr.support)} – direnç ~${fmt(sr.resistance)}. Net yön için fiyatın bu banttan hangi yöne kırdığını izle.`;
+    }
+  }
   if(verdict==='buy'){
-    let s=`${name} için göstergeler ağırlıklı olarak olumlu. `;
-    if(r!=null && r<=30) s+=`Aşırı satım bölgesinden (RSI ${r.toFixed(0)}) tepki ihtimali öne çıkıyor. `;
-    if(sr && sr.toSupPct<2) s+=`Fiyat destek bölgesine yakın, dönüş sinyali güçlenirse alım için izlenebilir. `;
-    s+='Yine de bu kesin bir yükseliş garantisi değildir; riskini belirle.';
+    let s=`${name} için teknik tablo ağırlıklı OLUMLU. `;
+    if(r!=null && r<=30) s+=`Fiyat aşırı satım bölgesinde (RSI ${r.toFixed(0)}) — tarihsel olarak bu bölgeler tepki alımı için elverişlidir. `;
+    else if(r!=null) s+=`RSI ${r.toFixed(0)}, momentum yukarı yönlü. `;
+    if(sr && sr.toSupPct<2) s+=`Fiyat desteğe çok yakın; buradan dönüş başlarsa risk/ödül oranı alım lehine. `;
+    s+=`Bir analist bu tabloda "kademeli alım / pozisyon biriktirme" senaryosunu değerlendirebilir.`;
+    s+=levels;
+    s+=` ⚠️ Bu kesin yükseliş garantisi DEĞİLDİR; olasılık değerlendirmesidir. Pozisyon büyüklüğünü ve stop seviyeni kendin belirle.`;
     return s;
   }
   if(verdict==='sell'){
-    let s=`${name} için göstergeler ağırlıklı olarak temkinli/olumsuz. `;
-    if(r!=null && r>=70) s+=`Aşırı alım bölgesi (RSI ${r.toFixed(0)}) düzeltme riskini artırıyor. `;
-    if(sr && sr.toResPct<2) s+=`Fiyat dirence yakın, geçemezse geri çekilebilir. `;
-    s+='Pozisyonun varsa kâr realizasyonu veya stop seviyeni gözden geçirmek isteyebilirsin. Bu kesin bir düşüş tahmini değildir.';
+    let s=`${name} için teknik tablo ağırlıklı TEMKİNLİ. `;
+    if(r!=null && r>=70) s+=`Fiyat aşırı alım bölgesinde (RSI ${r.toFixed(0)}) — bu bölgelerde düzeltme riski tarihsel olarak yüksektir. `;
+    else if(r!=null) s+=`RSI ${r.toFixed(0)}, momentum zayıflıyor. `;
+    if(sr && sr.toResPct<2) s+=`Fiyat dirence yapışmış; aşamazsa geri çekilme olasılığı artar. `;
+    s+=`Bir analist bu tabloda "kâr realizasyonu / yeni alımda acele etmeme" senaryosunu değerlendirebilir.`;
+    s+=levels;
+    s+=` ⚠️ Bu kesin düşüş tahmini DEĞİLDİR; olasılık değerlendirmesidir. Mevcut pozisyonun varsa stop seviyeni gözden geçir.`;
     return s;
   }
-  return `${name} için göstergeler karışık sinyal veriyor; belirgin bir yön yok. Net bir kurulum oluşana kadar beklemek mantıklı olabilir.`;
+  let s=`${name} için göstergeler KARIŞIK; baskın bir yön yok. Trend, momentum ve seviyeler net bir kurulum oluşturmuyor.`;
+  s+=levels;
+  s+=` Böyle dönemlerde acele pozisyon yerine kırılımı beklemek çoğu analistin tercihidir.`;
+  return s;
 }
 
 /* Verdict etiketleri */
@@ -913,7 +935,13 @@ function openAddFav(){
   document.body.appendChild(m);
 }
 window.openAddFav=openAddFav;
-function addFav(key){ if(!S.favorites.includes(key)){ S.favorites.push(key); LS.set('favorites',S.favorites); } closeDetail(); refreshAll(); }
+function addFav(key){
+  if(!S.favorites.includes(key)){ S.favorites.push(key); LS.set('favorites',S.favorites); }
+  closeDetail();
+  S.tab='watch';  // eklenen varlığı hemen görmesi için Takip'e geç
+  document.querySelectorAll('#tabbar button').forEach(x=>x.classList.toggle('active', x.dataset.tab==='watch'));
+  refreshAll();
+}
 window.addFav=addFav;
 function removeFav(key){ S.favorites=S.favorites.filter(f=>f!==key); LS.set('favorites',S.favorites); render(); }
 window.removeFav=removeFav;
